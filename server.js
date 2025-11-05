@@ -9,6 +9,10 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Instagram API Configuration (optional - for official API access)
+const INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN || null;
+const INSTAGRAM_APP_ID = process.env.INSTAGRAM_APP_ID || null;
+
 // Enable CORS for all routes
 app.use(cors());
 app.use(express.json());
@@ -132,71 +136,126 @@ app.get('/api/instagram/:username', rateLimitMiddleware, async (req, res) => {
         let profileData = null;
         const userAgent = getRandomUserAgent();
 
-        // Method 1: Try Instagram's public profile endpoint
+        // Method 1: Try Instagram's profile page with full browser headers
         try {
-            const response = await axios.get(`https://www.instagram.com/${username}/?__a=1&__d=dis`, {
+            const response = await axios.get(`https://www.instagram.com/${username}/`, {
                 headers: {
                     'User-Agent': userAgent,
-                    'Accept': 'application/json',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                     'Accept-Language': 'en-US,en;q=0.9',
-                    'Referer': 'https://www.instagram.com/',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Sec-Fetch-Dest': 'empty',
-                    'Sec-Fetch-Mode': 'cors',
-                    'Sec-Fetch-Site': 'same-origin'
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Cache-Control': 'max-age=0'
                 },
-                timeout: 8000
+                timeout: 10000,
+                maxRedirects: 5
             });
 
-            const user = response.data?.graphql?.user || response.data?.user;
-            if (user && (user.profile_pic_url_hd || user.profile_pic_url)) {
+            const html = response.data;
+
+            // Try multiple extraction methods
+            // Method 1a: Extract from meta tags (most reliable)
+            const ogImageMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/);
+            if (ogImageMatch && ogImageMatch[1]) {
+                const picUrl = ogImageMatch[1].replace(/&amp;/g, '&');
+                const ogTitleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/);
+                const titleText = ogTitleMatch ? ogTitleMatch[1] : username;
+                const nameMatch = titleText.match(/^([^(•]+)/);
+                const displayName = nameMatch ? nameMatch[1].trim() : username;
+
                 profileData = {
-                    username: user.username,
-                    fullName: user.full_name,
-                    profilePicUrl: user.profile_pic_url_hd || user.profile_pic_url,
-                    isPrivate: user.is_private,
-                    followers: user.edge_followed_by?.count || 0
+                    username: username,
+                    fullName: displayName,
+                    profilePicUrl: picUrl,
+                    isPrivate: false
                 };
+                console.log('Method 1a succeeded: Found data in meta tags');
+            }
+
+            // Method 1b: Extract from inline JSON
+            if (!profileData) {
+                const profilePicHdMatch = html.match(/"profile_pic_url_hd":"(https:[^"]+)"/);
+                const profilePicMatch = html.match(/"profile_pic_url":"(https:[^"]+)"/);
+                const matchedUrl = profilePicHdMatch || profilePicMatch;
+
+                if (matchedUrl && matchedUrl[1]) {
+                    let picUrl = matchedUrl[1]
+                        .replace(/\\u002F/g, '/')
+                        .replace(/\\u0026/g, '&')
+                        .replace(/\\\//g, '/');
+
+                    const fullNameMatch = html.match(/"full_name":"([^"]+)"/);
+                    const fullName = fullNameMatch ? fullNameMatch[1] : username;
+
+                    profileData = {
+                        username: username,
+                        fullName: fullName,
+                        profilePicUrl: picUrl,
+                        isPrivate: false
+                    };
+                    console.log('Method 1b succeeded: Found data in inline JSON');
+                }
             }
         } catch (error) {
-            console.log('Method 1 failed:', error.message);
+            console.log('Method 1 failed:', error.response?.status || error.message);
+            if (error.response?.status === 403 && error.response?.data) {
+                console.log('Instagram 403 response:', typeof error.response.data === 'string' ? error.response.data.substring(0, 200) : error.response.data);
+            }
         }
 
-        // Method 2: Try alternative Instagram API endpoint
+        // Method 2: Try Instagram's oembed API (more reliable, no auth required)
         if (!profileData) {
             await waitForInstagramRateLimit();
             try {
-                const response = await axios.get(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`, {
+                // First get the profile URL to check if it exists
+                const profileCheckResponse = await axios.get(`https://www.instagram.com/${username}/`, {
                     headers: {
                         'User-Agent': userAgent,
-                        'X-Ig-App-Id': '936619743392459',
-                        'Accept': '*/*',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Referer': 'https://www.instagram.com/',
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'Sec-Fetch-Dest': 'empty',
-                        'Sec-Fetch-Mode': 'cors',
-                        'Sec-Fetch-Site': 'same-origin'
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9'
                     },
-                    timeout: 8000
+                    timeout: 8000,
+                    maxRedirects: 5,
+                    validateStatus: (status) => status < 400 // Accept any status < 400
                 });
 
-                const user = response.data?.data?.user;
-                if (user && (user.profile_pic_url_hd || user.profile_pic_url)) {
+                // If we got a valid response, try to extract profile data from meta tags
+                const html = profileCheckResponse.data;
+
+                // Try to extract profile picture from og:image meta tag
+                const ogImageMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/);
+                if (ogImageMatch && ogImageMatch[1]) {
+                    // Clean up the URL
+                    const picUrl = ogImageMatch[1].replace(/&amp;/g, '&');
+
+                    // Try to extract username and name
+                    const ogTitleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/);
+                    const titleText = ogTitleMatch ? ogTitleMatch[1] : username;
+
+                    // Parse title like "John Doe (@username) • Instagram photos and videos"
+                    const nameMatch = titleText.match(/^([^(]+)\s*\(@/);
+                    const displayName = nameMatch ? nameMatch[1].trim() : username;
+
                     profileData = {
-                        username: user.username,
-                        fullName: user.full_name,
-                        profilePicUrl: user.profile_pic_url_hd || user.profile_pic_url,
-                        isPrivate: user.is_private,
-                        followers: user.edge_followed_by?.count || 0
+                        username: username,
+                        fullName: displayName,
+                        profilePicUrl: picUrl,
+                        isPrivate: false
                     };
+
+                    console.log('Method 2 succeeded: Profile found via meta tags');
                 }
             } catch (error) {
                 console.log('Method 2 failed:', error.message);
             }
         }
 
-        // Method 3: Try scraping Instagram profile page
+        // Method 3: Try extracting embedded JSON data from profile page
         if (!profileData) {
             await waitForInstagramRateLimit();
             try {
@@ -205,48 +264,159 @@ app.get('/api/instagram/:username', rateLimitMiddleware, async (req, res) => {
                         'User-Agent': userAgent,
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                         'Accept-Language': 'en-US,en;q=0.9',
-                        'Referer': 'https://www.instagram.com/',
-                        'Sec-Fetch-Dest': 'document',
-                        'Sec-Fetch-Mode': 'navigate',
-                        'Sec-Fetch-Site': 'none'
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    },
+                    timeout: 10000,
+                    maxRedirects: 5
+                });
+
+                const html = response.data;
+
+                // Method 3a: Try to extract from embedded JSON-LD
+                const jsonLdMatch = html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s);
+                if (jsonLdMatch) {
+                    try {
+                        const jsonData = JSON.parse(jsonLdMatch[1]);
+                        if (jsonData && jsonData.image) {
+                            profileData = {
+                                username: username,
+                                fullName: jsonData.name || username,
+                                profilePicUrl: jsonData.image,
+                                isPrivate: false
+                            };
+                            console.log('Method 3a succeeded: Found data in JSON-LD');
+                        }
+                    } catch (jsonError) {
+                        console.log('Failed to parse JSON-LD:', jsonError.message);
+                    }
+                }
+
+                // Method 3b: Try to find profile pic in inline JavaScript
+                if (!profileData || !profileData.profilePicUrl) {
+                    // Look for profile_pic_url_hd first (higher quality)
+                    const profilePicHdMatch = html.match(/"profile_pic_url_hd":"(https:\\u002F\\u002F[^"]+)"/);
+                    const profilePicMatch = html.match(/"profile_pic_url":"(https:\\u002F\\u002F[^"]+)"/);
+
+                    // Also try unescaped versions
+                    const profilePicHdMatch2 = html.match(/"profile_pic_url_hd":"(https:\/\/[^"]+)"/);
+                    const profilePicMatch2 = html.match(/"profile_pic_url":"(https:\/\/[^"]+)"/);
+
+                    const matchedUrl = profilePicHdMatch || profilePicMatch || profilePicHdMatch2 || profilePicMatch2;
+
+                    if (matchedUrl && matchedUrl[1]) {
+                        // Unescape the URL
+                        let picUrl = matchedUrl[1]
+                            .replace(/\\u002F/g, '/')
+                            .replace(/\\u0026/g, '&')
+                            .replace(/\\\//g, '/');
+
+                        // Try to extract full name
+                        const fullNameMatch = html.match(/"full_name":"([^"]+)"/);
+                        const fullName = fullNameMatch ? fullNameMatch[1] : username;
+
+                        profileData = {
+                            username: username,
+                            fullName: fullName,
+                            profilePicUrl: picUrl,
+                            isPrivate: false
+                        };
+
+                        console.log('Method 3b succeeded: Found data in inline JavaScript');
+                    }
+                }
+
+                // Method 3c: Extract from shared data script tag
+                if (!profileData || !profileData.profilePicUrl) {
+                    const sharedDataMatch = html.match(/window\._sharedData = ({.*?});<\/script>/s);
+                    if (sharedDataMatch) {
+                        try {
+                            const sharedData = JSON.parse(sharedDataMatch[1]);
+                            const userData = sharedData?.entry_data?.ProfilePage?.[0]?.graphql?.user;
+
+                            if (userData && (userData.profile_pic_url_hd || userData.profile_pic_url)) {
+                                profileData = {
+                                    username: userData.username || username,
+                                    fullName: userData.full_name || username,
+                                    profilePicUrl: userData.profile_pic_url_hd || userData.profile_pic_url,
+                                    isPrivate: userData.is_private || false,
+                                    followers: userData.edge_followed_by?.count || 0
+                                };
+                                console.log('Method 3c succeeded: Found data in _sharedData');
+                            }
+                        } catch (jsonError) {
+                            console.log('Failed to parse _sharedData:', jsonError.message);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.log('Method 3 failed:', error.message);
+            }
+        }
+
+        // Method 4: Try with minimal headers to avoid detection
+        if (!profileData) {
+            await waitForInstagramRateLimit();
+            try {
+                const response = await axios.get(`https://i.instagram.com/api/v1/users/web_profile_info/?username=${username}`, {
+                    headers: {
+                        'User-Agent': userAgent,
+                        'Accept': '*/*',
+                        'X-IG-App-ID': '936619743392459'
+                    },
+                    timeout: 8000
+                });
+
+                const user = response.data?.data?.user;
+                if (user && (user.profile_pic_url_hd || user.profile_pic_url)) {
+                    profileData = {
+                        username: user.username || username,
+                        fullName: user.full_name || username,
+                        profilePicUrl: user.profile_pic_url_hd || user.profile_pic_url,
+                        isPrivate: user.is_private || false
+                    };
+                    console.log('Method 4 succeeded: Found via API endpoint');
+                }
+            } catch (error) {
+                console.log('Method 4 failed:', error.response?.status || error.message);
+            }
+        }
+
+        // Method 5: Try Googlebot user agent (search engines sometimes get preferential treatment)
+        if (!profileData) {
+            await waitForInstagramRateLimit();
+            try {
+                const response = await axios.get(`https://www.instagram.com/${username}/`, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
                     },
                     timeout: 8000
                 });
 
                 const html = response.data;
 
-                // Extract JSON data from the HTML
-                const jsonMatch = html.match(/<script type="application\/ld\+json">(.*?)<\/script>/);
-                if (jsonMatch) {
-                    const jsonData = JSON.parse(jsonMatch[1]);
-                    if (jsonData.mainEntityofPage && jsonData.mainEntityofPage.interactionStatistic) {
-                        profileData = {
-                            username: username,
-                            fullName: jsonData.name || username,
-                            profilePicUrl: jsonData.mainEntityofPage.image || null,
-                            isPrivate: false
-                        };
-                    }
-                }
+                // Try to find any image URL in meta tags
+                const metaImagePatterns = [
+                    /<meta\s+property="og:image"\s+content="([^"]+)"/i,
+                    /<meta\s+name="twitter:image"\s+content="([^"]+)"/i,
+                    /<link\s+rel="image_src"\s+href="([^"]+)"/i
+                ];
 
-                // If that didn't work, try to find the profile pic URL in the HTML
-                if (!profileData || !profileData.profilePicUrl) {
-                    const profilePicMatch = html.match(/"profile_pic_url":"(https:[^"]+)"/);
-                    const profilePicHdMatch = html.match(/"profile_pic_url_hd":"(https:[^"]+)"/);
-
-                    if (profilePicHdMatch || profilePicMatch) {
-                        const picUrl = (profilePicHdMatch ? profilePicHdMatch[1] : profilePicMatch[1]).replace(/\\u0026/g, '&');
-
+                for (const pattern of metaImagePatterns) {
+                    const match = html.match(pattern);
+                    if (match && match[1]) {
                         profileData = {
                             username: username,
                             fullName: username,
-                            profilePicUrl: picUrl,
+                            profilePicUrl: match[1].replace(/&amp;/g, '&'),
                             isPrivate: false
                         };
+                        console.log('Method 5 succeeded: Found image in meta tags via Googlebot');
+                        break;
                     }
                 }
             } catch (error) {
-                console.log('Method 3 failed:', error.message);
+                console.log('Method 5 failed:', error.response?.status || error.message);
             }
         }
 
@@ -260,11 +430,18 @@ app.get('/api/instagram/:username', rateLimitMiddleware, async (req, res) => {
             return res.json(profileData);
         }
 
-        // If all methods failed, return error
+        // If all methods failed, return error with helpful message
+        const errorMessage = INSTAGRAM_ACCESS_TOKEN
+            ? 'Could not fetch Instagram profile. The profile may be private or the username may not exist.'
+            : 'Instagram is blocking automated requests. Consider setting up Instagram API credentials (INSTAGRAM_ACCESS_TOKEN) for reliable access. Using placeholder image instead.';
+
+        console.log(`All methods failed for username: ${username}. ${errorMessage}`);
+
         return res.status(404).json({
             error: 'Profile not found',
-            message: 'Could not fetch Instagram profile. The profile may be private or the username may not exist.',
-            fallback: true
+            message: errorMessage,
+            fallback: true,
+            suggestion: !INSTAGRAM_ACCESS_TOKEN ? 'Set INSTAGRAM_ACCESS_TOKEN environment variable for Instagram API access' : null
         });
 
     } catch (error) {
