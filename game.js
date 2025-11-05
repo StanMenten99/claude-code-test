@@ -361,7 +361,8 @@ class BattleArena {
 
         try {
             preview.innerHTML = 'Loading...';
-            const imageUrl = await instagramFetcher.fetchProfilePicture(username);
+            // Use debounced version to prevent rapid-fire requests on each keystroke
+            const imageUrl = await instagramFetcher.fetchProfilePictureDebounced(username, false, 800);
             preview.innerHTML = `<img src="${imageUrl}" alt="${username}">`;
         } catch (error) {
             preview.innerHTML = 'Failed to load';
