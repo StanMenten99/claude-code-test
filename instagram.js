@@ -2,36 +2,68 @@
 class InstagramFetcher {
     constructor() {
         this.cache = new Map();
+        this.cacheExpiry = new Map(); // Track cache expiration
+        this.cacheTimeout = 5 * 60 * 1000; // 5 minutes cache
     }
 
     /**
-     * Fetches Instagram profile picture for a given username
+     * Fetches Instagram profile picture for a given username (real-time)
      * @param {string} username - Instagram username
+     * @param {boolean} forceRefresh - Force refresh from server
      * @returns {Promise<string>} - URL of the profile picture
      */
-    async fetchProfilePicture(username) {
+    async fetchProfilePicture(username, forceRefresh = false) {
         if (!username || username.trim() === '') {
             throw new Error('Username is required');
         }
 
-        // Check cache first
-        if (this.cache.has(username)) {
-            return this.cache.get(username);
+        // Check cache validity
+        const now = Date.now();
+        if (!forceRefresh && this.cache.has(username)) {
+            const expiry = this.cacheExpiry.get(username);
+            if (expiry && expiry > now) {
+                return this.cache.get(username);
+            }
         }
 
         try {
-            // Method 1: Try using Instagram's public endpoint
-            const url = await this.tryPublicEndpoint(username);
+            // Method 1: Try multiple Instagram endpoints
+            let url = await this.tryMultipleEndpoints(username);
             if (url) {
                 this.cache.set(username, url);
+                this.cacheExpiry.set(username, now + this.cacheTimeout);
                 return url;
             }
         } catch (error) {
-            console.warn('Public endpoint failed:', error);
+            console.warn('All endpoints failed:', error);
         }
 
         // Fallback: Generate a placeholder avatar
-        return this.generatePlaceholder(username);
+        const placeholder = this.generatePlaceholder(username);
+        this.cache.set(username, placeholder);
+        this.cacheExpiry.set(username, now + this.cacheTimeout);
+        return placeholder;
+    }
+
+    /**
+     * Try multiple methods to fetch Instagram profile picture
+     * @param {string} username - Instagram username
+     * @returns {Promise<string|null>} - Profile picture URL or null
+     */
+    async tryMultipleEndpoints(username) {
+        // Method 1: Try direct Instagram endpoint
+        let url = await this.tryPublicEndpoint(username);
+        if (url) return url;
+
+        // Method 2: Try alternative endpoint
+        url = await this.tryAlternativeEndpoint(username);
+        if (url) return url;
+
+        // Method 3: Try using insta-fetcher proxy
+        url = await this.tryProxyEndpoint(username);
+        if (url) return url;
+
+        return null;
     }
 
     /**
@@ -65,6 +97,69 @@ class InstagramFetcher {
             return null;
         } catch (error) {
             console.error('Failed to fetch from Instagram:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Alternative endpoint method
+     * @param {string} username - Instagram username
+     * @returns {Promise<string|null>} - Profile picture URL or null
+     */
+    async tryAlternativeEndpoint(username) {
+        try {
+            const response = await fetch(`https://www.instagram.com/api/v1/users/web_profile_info/?username=${username}`, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'X-Ig-App-Id': '936619743392459'
+                }
+            });
+
+            if (!response.ok) {
+                return null;
+            }
+
+            const data = await response.json();
+            const user = data?.data?.user;
+
+            if (user && user.profile_pic_url_hd) {
+                return user.profile_pic_url_hd;
+            } else if (user && user.profile_pic_url) {
+                return user.profile_pic_url;
+            }
+
+            return null;
+        } catch (error) {
+            console.error('Alternative endpoint failed:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Proxy endpoint method using third-party service
+     * @param {string} username - Instagram username
+     * @returns {Promise<string|null>} - Profile picture URL or null
+     */
+    async tryProxyEndpoint(username) {
+        try {
+            // Using imgInn or similar proxy service
+            const response = await fetch(`https://imginn.com/${username}/`);
+
+            if (!response.ok) {
+                return null;
+            }
+
+            const html = await response.text();
+
+            // Extract profile picture URL from HTML
+            const match = html.match(/property="og:image"\s+content="([^"]+)"/);
+            if (match && match[1]) {
+                return match[1];
+            }
+
+            return null;
+        } catch (error) {
+            console.error('Proxy endpoint failed:', error);
             return null;
         }
     }

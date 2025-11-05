@@ -11,38 +11,34 @@
         <h1>Instagram Battle Arena</h1>
 
         <div class="setup-panel" id="setupPanel">
-            <div class="player-setup">
-                <h2>Player 1</h2>
-                <input type="text" id="player1Username" placeholder="Instagram Username">
-                <div class="player-preview" id="player1Preview"></div>
+            <div id="playersContainer">
+                <div class="player-setup" data-player="1">
+                    <div class="player-header">
+                        <h2>Player 1</h2>
+                    </div>
+                    <input type="text" class="player-username" data-player="1" placeholder="Instagram Username">
+                    <div class="player-preview" data-player="1">Enter username</div>
+                </div>
+
+                <div class="player-setup" data-player="2">
+                    <div class="player-header">
+                        <h2>Player 2</h2>
+                    </div>
+                    <input type="text" class="player-username" data-player="2" placeholder="Instagram Username">
+                    <div class="player-preview" data-player="2">Enter username</div>
+                </div>
             </div>
 
-            <div class="player-setup">
-                <h2>Player 2</h2>
-                <input type="text" id="player2Username" placeholder="Instagram Username">
-                <div class="player-preview" id="player2Preview"></div>
+            <div class="setup-controls">
+                <button id="addPlayerBtn" class="btn-secondary">Add Player</button>
+                <button id="startBattle" class="btn-start">Start Battle!</button>
             </div>
-
-            <button id="startBattle" class="btn-start">Start Battle!</button>
         </div>
 
         <div class="game-container" id="gameContainer" style="display: none;">
             <div class="game-header">
-                <div class="player-info">
-                    <div class="player-name" id="p1Name"></div>
-                    <div class="health-bar">
-                        <div class="health-fill" id="p1Health"></div>
-                    </div>
-                </div>
-
+                <div id="playersHealthContainer" class="players-health"></div>
                 <div class="timer" id="timer">60</div>
-
-                <div class="player-info">
-                    <div class="player-name" id="p2Name"></div>
-                    <div class="health-bar">
-                        <div class="health-fill" id="p2Health"></div>
-                    </div>
-                </div>
             </div>
 
             <canvas id="battleArena" width="800" height="800"></canvas>

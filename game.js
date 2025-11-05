@@ -8,6 +8,7 @@ class Player {
         this.x = x;
         this.y = y;
         this.radius = 40;
+        this.baseRadius = 40;
         this.vx = (Math.random() - 0.5) * 6;
         this.vy = (Math.random() - 0.5) * 6;
         this.health = 100;
@@ -16,7 +17,11 @@ class Player {
         this.power = 1;
         this.speed = 1;
         this.shield = false;
+        this.invisible = false;
+        this.vampire = false;
+        this.ghost = false;
         this.powerupTimer = 0;
+        this.powerupType = null;
     }
 
     update(canvasWidth, canvasHeight) {
@@ -24,15 +29,23 @@ class Player {
         this.x += this.vx * this.speed;
         this.y += this.vy * this.speed;
 
-        // Bounce off walls
-        if (this.x - this.radius <= 0 || this.x + this.radius >= canvasWidth) {
-            this.vx *= -1;
-            this.x = Math.max(this.radius, Math.min(canvasWidth - this.radius, this.x));
-        }
+        // Bounce off walls (unless ghost mode)
+        if (!this.ghost) {
+            if (this.x - this.radius <= 0 || this.x + this.radius >= canvasWidth) {
+                this.vx *= -1;
+                this.x = Math.max(this.radius, Math.min(canvasWidth - this.radius, this.x));
+            }
 
-        if (this.y - this.radius <= 0 || this.y + this.radius >= canvasHeight) {
-            this.vy *= -1;
-            this.y = Math.max(this.radius, Math.min(canvasHeight - this.radius, this.y));
+            if (this.y - this.radius <= 0 || this.y + this.radius >= canvasHeight) {
+                this.vy *= -1;
+                this.y = Math.max(this.radius, Math.min(canvasHeight - this.radius, this.y));
+            }
+        } else {
+            // Ghost mode - wrap around edges
+            if (this.x - this.radius > canvasWidth) this.x = -this.radius;
+            if (this.x + this.radius < 0) this.x = canvasWidth + this.radius;
+            if (this.y - this.radius > canvasHeight) this.y = -this.radius;
+            if (this.y + this.radius < 0) this.y = canvasHeight + this.radius;
         }
 
         // Update powerup timer
@@ -45,12 +58,26 @@ class Player {
     }
 
     draw(ctx) {
+        // Apply invisibility effect
+        if (this.invisible) {
+            ctx.globalAlpha = 0.3;
+        }
+
         // Draw shield if active
         if (this.shield) {
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.radius + 10, 0, Math.PI * 2);
             ctx.strokeStyle = 'rgba(100, 200, 255, 0.7)';
             ctx.lineWidth = 5;
+            ctx.stroke();
+        }
+
+        // Draw ghost aura if active
+        if (this.ghost) {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius + 8, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(200, 100, 255, 0.5)';
+            ctx.lineWidth = 4;
             ctx.stroke();
         }
 
@@ -74,27 +101,39 @@ class Player {
         // Draw border
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.strokeStyle = this.playerNumber === 1 ? '#ff6b6b' : '#4ecdc4';
+        ctx.strokeStyle = this.color || '#ff6b6b';
         ctx.lineWidth = 4;
         ctx.stroke();
 
-        // Draw power indicator
-        if (this.power > 1) {
+        // Reset alpha
+        ctx.globalAlpha = 1;
+
+        // Draw powerup indicators
+        if (this.power > 1 || this.vampire) {
             ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
             ctx.font = 'bold 20px Arial';
             ctx.textAlign = 'center';
-            ctx.fillText('⚡', this.x, this.y - this.radius - 10);
+            ctx.fillText(this.vampire ? '🧛' : '⚡', this.x, this.y - this.radius - 10);
         }
     }
 
-    takeDamage(amount) {
-        if (!this.shield) {
+    takeDamage(amount, attacker = null) {
+        if (!this.shield && !this.invisible) {
             this.health = Math.max(0, this.health - amount);
+
+            // If attacker has vampire, heal them
+            if (attacker && attacker.vampire) {
+                attacker.health = Math.min(attacker.maxHealth, attacker.health + amount * 0.5);
+            }
         }
     }
 
     applyPowerup(powerup) {
+        // Reset previous powerup
+        this.resetPowerup();
+
         this.powerupTimer = 300; // 5 seconds at 60fps
+        this.powerupType = powerup.type;
 
         switch (powerup.type) {
             case 'speed':
@@ -108,6 +147,35 @@ class Player {
                 break;
             case 'health':
                 this.health = Math.min(this.maxHealth, this.health + 30);
+                this.powerupTimer = 0; // Instant effect
+                break;
+            case 'freeze':
+                // This affects other players, handled in game logic
+                break;
+            case 'invisible':
+                this.invisible = true;
+                break;
+            case 'size':
+                this.radius = this.baseRadius * 1.5;
+                this.power = 1.5;
+                break;
+            case 'shrink':
+                this.radius = this.baseRadius * 0.6;
+                this.speed = 1.5;
+                break;
+            case 'teleport':
+                // Handled in game logic
+                this.powerupTimer = 0; // Instant effect
+                break;
+            case 'rage':
+                this.power = 2.5;
+                break;
+            case 'vampire':
+                this.vampire = true;
+                this.power = 1.3;
+                break;
+            case 'ghost':
+                this.ghost = true;
                 break;
         }
     }
@@ -116,6 +184,11 @@ class Player {
         this.power = 1;
         this.speed = 1;
         this.shield = false;
+        this.invisible = false;
+        this.vampire = false;
+        this.ghost = false;
+        this.radius = this.baseRadius;
+        this.powerupType = null;
     }
 }
 
@@ -134,7 +207,15 @@ class Powerup {
             speed: { color: '#00d2ff', emoji: '⚡', name: 'Speed Boost' },
             power: { color: '#ffd700', emoji: '💪', name: 'Power Up' },
             shield: { color: '#64c8ff', emoji: '🛡️', name: 'Shield' },
-            health: { color: '#ff6b6b', emoji: '❤️', name: 'Health' }
+            health: { color: '#ff6b6b', emoji: '❤️', name: 'Health' },
+            freeze: { color: '#88e0ff', emoji: '❄️', name: 'Freeze Others' },
+            invisible: { color: '#c8a2ff', emoji: '👻', name: 'Invisibility' },
+            size: { color: '#ff8c42', emoji: '🔺', name: 'Size Up' },
+            shrink: { color: '#a29bfe', emoji: '🔻', name: 'Shrink' },
+            teleport: { color: '#fd79a8', emoji: '✨', name: 'Teleport' },
+            rage: { color: '#ff3838', emoji: '😡', name: 'Rage Mode' },
+            vampire: { color: '#8b0000', emoji: '🧛', name: 'Vampire' },
+            ghost: { color: '#9b59b6', emoji: '👁️', name: 'Ghost' }
         };
     }
 
@@ -193,6 +274,9 @@ class BattleArena {
         this.gameTime = 60;
         this.gameActive = false;
         this.paused = false;
+        this.playerCount = 2;
+        this.maxPlayers = 8;
+        this.playerColors = ['#ff6b6b', '#4ecdc4', '#45b7af', '#ffd93d', '#6bcf7f', '#a29bfe', '#fd79a8', '#fab1a0'];
 
         this.powerupSpawnTimer = 0;
         this.powerupSpawnInterval = 180; // Spawn every 3 seconds
@@ -201,17 +285,11 @@ class BattleArena {
     }
 
     setupEventListeners() {
-        // Player input handlers
-        const player1Input = document.getElementById('player1Username');
-        const player2Input = document.getElementById('player2Username');
+        // Setup player input listeners
+        this.setupPlayerInputListeners();
 
-        player1Input.addEventListener('input', async (e) => {
-            await this.previewPlayer(e.target.value, 'player1Preview');
-        });
-
-        player2Input.addEventListener('input', async (e) => {
-            await this.previewPlayer(e.target.value, 'player2Preview');
-        });
+        // Add player button
+        document.getElementById('addPlayerBtn').addEventListener('click', () => this.addPlayer());
 
         // Game control handlers
         document.getElementById('startBattle').addEventListener('click', () => this.startGame());
@@ -220,8 +298,61 @@ class BattleArena {
         document.getElementById('playAgainBtn').addEventListener('click', () => this.playAgain());
     }
 
-    async previewPlayer(username, previewId) {
-        const preview = document.getElementById(previewId);
+    setupPlayerInputListeners() {
+        const playerInputs = document.querySelectorAll('.player-username');
+        playerInputs.forEach(input => {
+            input.addEventListener('input', async (e) => {
+                const playerNum = e.target.getAttribute('data-player');
+                await this.previewPlayer(e.target.value, playerNum);
+            });
+        });
+    }
+
+    addPlayer() {
+        if (this.playerCount >= this.maxPlayers) {
+            alert(`Maximum ${this.maxPlayers} players allowed!`);
+            return;
+        }
+
+        this.playerCount++;
+        const playersContainer = document.getElementById('playersContainer');
+
+        const playerSetup = document.createElement('div');
+        playerSetup.className = 'player-setup';
+        playerSetup.setAttribute('data-player', this.playerCount);
+
+        playerSetup.innerHTML = `
+            <div class="player-header">
+                <h2>Player ${this.playerCount}</h2>
+                <button class="remove-player-btn" onclick="battleArena.removePlayer(${this.playerCount})">Remove</button>
+            </div>
+            <input type="text" class="player-username" data-player="${this.playerCount}" placeholder="Instagram Username">
+            <div class="player-preview" data-player="${this.playerCount}">Enter username</div>
+        `;
+
+        playersContainer.appendChild(playerSetup);
+
+        // Re-setup listeners for new input
+        this.setupPlayerInputListeners();
+    }
+
+    removePlayer(playerNum) {
+        if (this.playerCount <= 2) {
+            alert('Minimum 2 players required!');
+            return;
+        }
+
+        const playerSetup = document.querySelector(`.player-setup[data-player="${playerNum}"]`);
+        if (playerSetup) {
+            playerSetup.remove();
+            this.playerCount--;
+        }
+    }
+
+    async previewPlayer(username, playerNum) {
+        const preview = document.querySelector(`.player-preview[data-player="${playerNum}"]`);
+
+        if (!preview) return;
 
         if (!username || username.trim() === '') {
             preview.innerHTML = 'Enter username';
@@ -239,32 +370,49 @@ class BattleArena {
     }
 
     async startGame() {
-        const username1 = document.getElementById('player1Username').value.trim();
-        const username2 = document.getElementById('player2Username').value.trim();
+        // Get all player inputs
+        const playerInputs = document.querySelectorAll('.player-username');
+        const usernames = [];
 
-        if (!username1 || !username2) {
-            alert('Please enter both usernames!');
+        // Collect all usernames
+        playerInputs.forEach(input => {
+            const username = input.value.trim();
+            if (username) {
+                usernames.push(username);
+            }
+        });
+
+        if (usernames.length < 2) {
+            alert('Please enter at least 2 usernames!');
             return;
         }
 
         try {
-            // Fetch profile pictures
-            const image1Url = await instagramFetcher.fetchProfilePicture(username1);
-            const image2Url = await instagramFetcher.fetchProfilePicture(username2);
+            // Fetch and preload all profile pictures
+            this.players = [];
+            const positions = this.calculatePlayerPositions(usernames.length);
 
-            // Preload images
-            const image1 = await instagramFetcher.preloadImage(image1Url);
-            const image2 = await instagramFetcher.preloadImage(image2Url);
+            for (let i = 0; i < usernames.length; i++) {
+                const username = usernames[i];
+                const imageUrl = await instagramFetcher.fetchProfilePicture(username, true);
+                const image = await instagramFetcher.preloadImage(imageUrl);
 
-            // Initialize players
-            this.players = [
-                new Player(username1, image1, 200, 400, 1),
-                new Player(username2, image2, 600, 400, 2)
-            ];
+                const player = new Player(
+                    username,
+                    image,
+                    positions[i].x,
+                    positions[i].y,
+                    i + 1
+                );
 
-            // Update UI
-            document.getElementById('p1Name').textContent = username1;
-            document.getElementById('p2Name').textContent = username2;
+                // Assign unique color to each player
+                player.color = this.playerColors[i % this.playerColors.length];
+
+                this.players.push(player);
+            }
+
+            // Update UI with player health bars
+            this.createHealthBars();
 
             // Show game container
             document.getElementById('setupPanel').style.display = 'none';
@@ -280,6 +428,50 @@ class BattleArena {
             alert('Error starting game: ' + error.message);
             console.error(error);
         }
+    }
+
+    calculatePlayerPositions(numPlayers) {
+        const positions = [];
+        const canvasWidth = this.canvas.width;
+        const canvasHeight = this.canvas.height;
+        const padding = 100;
+
+        if (numPlayers === 2) {
+            positions.push({ x: padding + 100, y: canvasHeight / 2 });
+            positions.push({ x: canvasWidth - padding - 100, y: canvasHeight / 2 });
+        } else {
+            // Arrange players in a circle
+            const centerX = canvasWidth / 2;
+            const centerY = canvasHeight / 2;
+            const radius = Math.min(canvasWidth, canvasHeight) / 2 - padding;
+
+            for (let i = 0; i < numPlayers; i++) {
+                const angle = (i / numPlayers) * Math.PI * 2 - Math.PI / 2;
+                positions.push({
+                    x: centerX + Math.cos(angle) * radius,
+                    y: centerY + Math.sin(angle) * radius
+                });
+            }
+        }
+
+        return positions;
+    }
+
+    createHealthBars() {
+        const healthContainer = document.getElementById('playersHealthContainer');
+        healthContainer.innerHTML = '';
+
+        this.players.forEach(player => {
+            const playerInfo = document.createElement('div');
+            playerInfo.className = 'player-info';
+            playerInfo.innerHTML = `
+                <div class="player-name" style="color: ${player.color}">${player.username}</div>
+                <div class="health-bar">
+                    <div class="health-fill" id="p${player.playerNumber}Health" style="background: ${player.color}"></div>
+                </div>
+            `;
+            healthContainer.appendChild(playerInfo);
+        });
     }
 
     startGameLoop() {
@@ -341,6 +533,22 @@ class BattleArena {
             this.players.forEach(player => {
                 if (powerup.checkCollision(player)) {
                     player.applyPowerup(powerup);
+
+                    // Handle special powerups
+                    if (powerup.type === 'freeze') {
+                        // Freeze all other players
+                        this.players.forEach(otherPlayer => {
+                            if (otherPlayer !== player && otherPlayer.health > 0) {
+                                otherPlayer.speed = 0.3;
+                                otherPlayer.powerupTimer = 180; // 3 seconds
+                            }
+                        });
+                    } else if (powerup.type === 'teleport') {
+                        // Teleport player to random position
+                        player.x = 100 + Math.random() * (this.canvas.width - 200);
+                        player.y = 100 + Math.random() * (this.canvas.height - 200);
+                    }
+
                     powerup.active = false;
                 }
             });
@@ -349,47 +557,62 @@ class BattleArena {
         // Update health bars
         this.updateHealthBars();
 
-        // Check for game over
-        if (this.players[0].health <= 0 || this.players[1].health <= 0) {
+        // Check for game over - count alive players
+        const alivePlayers = this.players.filter(p => p.health > 0);
+        if (alivePlayers.length <= 1) {
             this.endGame();
         }
     }
 
     checkPlayerCollision() {
-        const [p1, p2] = this.players;
-        const dx = p2.x - p1.x;
-        const dy = p2.y - p1.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
+        // Check collision between all pairs of players
+        for (let i = 0; i < this.players.length; i++) {
+            for (let j = i + 1; j < this.players.length; j++) {
+                const p1 = this.players[i];
+                const p2 = this.players[j];
 
-        if (distance < p1.radius + p2.radius) {
-            // Collision detected - apply damage and bounce
-            const damage = 2;
-            p1.takeDamage(damage * p2.power);
-            p2.takeDamage(damage * p1.power);
+                // Skip collision if either player is a ghost
+                if (p1.ghost || p2.ghost) continue;
 
-            // Bounce players apart
-            const angle = Math.atan2(dy, dx);
-            const targetX = p1.x + Math.cos(angle) * (p1.radius + p2.radius);
-            const targetY = p1.y + Math.sin(angle) * (p1.radius + p2.radius);
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
 
-            const ax = (targetX - p2.x) * 0.05;
-            const ay = (targetY - p2.y) * 0.05;
+                if (distance < p1.radius + p2.radius) {
+                    // Collision detected - apply damage and bounce
+                    const damage = 2;
+                    p1.takeDamage(damage * p2.power, p2);
+                    p2.takeDamage(damage * p1.power, p1);
 
-            p1.vx -= ax;
-            p1.vy -= ay;
-            p2.vx += ax;
-            p2.vy += ay;
+                    // Bounce players apart
+                    const angle = Math.atan2(dy, dx);
+                    const targetX = p1.x + Math.cos(angle) * (p1.radius + p2.radius);
+                    const targetY = p1.y + Math.sin(angle) * (p1.radius + p2.radius);
 
-            // Add some randomness to prevent getting stuck
-            p1.vx += (Math.random() - 0.5) * 0.5;
-            p1.vy += (Math.random() - 0.5) * 0.5;
-            p2.vx += (Math.random() - 0.5) * 0.5;
-            p2.vy += (Math.random() - 0.5) * 0.5;
+                    const ax = (targetX - p2.x) * 0.05;
+                    const ay = (targetY - p2.y) * 0.05;
+
+                    p1.vx -= ax;
+                    p1.vy -= ay;
+                    p2.vx += ax;
+                    p2.vy += ay;
+
+                    // Add some randomness to prevent getting stuck
+                    p1.vx += (Math.random() - 0.5) * 0.5;
+                    p1.vy += (Math.random() - 0.5) * 0.5;
+                    p2.vx += (Math.random() - 0.5) * 0.5;
+                    p2.vy += (Math.random() - 0.5) * 0.5;
+                }
+            }
         }
     }
 
     spawnPowerup() {
-        const types = ['speed', 'power', 'shield', 'health'];
+        const types = [
+            'speed', 'power', 'shield', 'health',
+            'freeze', 'invisible', 'size', 'shrink',
+            'teleport', 'rage', 'vampire', 'ghost'
+        ];
         const type = types[Math.floor(Math.random() * types.length)];
 
         const x = 100 + Math.random() * (this.canvas.width - 200);
@@ -399,11 +622,13 @@ class BattleArena {
     }
 
     updateHealthBars() {
-        const p1HealthPercent = (this.players[0].health / this.players[0].maxHealth) * 100;
-        const p2HealthPercent = (this.players[1].health / this.players[1].maxHealth) * 100;
-
-        document.getElementById('p1Health').style.width = p1HealthPercent + '%';
-        document.getElementById('p2Health').style.width = p2HealthPercent + '%';
+        this.players.forEach(player => {
+            const healthPercent = (player.health / player.maxHealth) * 100;
+            const healthBar = document.getElementById(`p${player.playerNumber}Health`);
+            if (healthBar) {
+                healthBar.style.width = healthPercent + '%';
+            }
+        });
     }
 
     render() {
@@ -474,22 +699,25 @@ class BattleArena {
             cancelAnimationFrame(this.gameLoop);
         }
 
-        // Determine winner
+        // Determine winner(s)
+        const alivePlayers = this.players.filter(p => p.health > 0);
         let winnerText = '';
-        if (this.players[0].health <= 0 && this.players[1].health <= 0) {
-            winnerText = "It's a tie!";
-        } else if (this.players[0].health <= 0) {
-            winnerText = `${this.players[1].username} wins!`;
-        } else if (this.players[1].health <= 0) {
-            winnerText = `${this.players[0].username} wins!`;
+
+        if (alivePlayers.length === 0) {
+            winnerText = "Everyone was eliminated - It's a tie!";
+        } else if (alivePlayers.length === 1) {
+            winnerText = `${alivePlayers[0].username} wins!`;
         } else {
-            // Time ran out - higher health wins
-            if (this.players[0].health > this.players[1].health) {
-                winnerText = `${this.players[0].username} wins!`;
-            } else if (this.players[1].health > this.players[0].health) {
-                winnerText = `${this.players[1].username} wins!`;
+            // Multiple players alive - find highest health
+            const sortedPlayers = [...alivePlayers].sort((a, b) => b.health - a.health);
+            const maxHealth = sortedPlayers[0].health;
+            const winners = sortedPlayers.filter(p => p.health === maxHealth);
+
+            if (winners.length === 1) {
+                winnerText = `${winners[0].username} wins with ${Math.round(maxHealth)} HP!`;
             } else {
-                winnerText = "It's a tie!";
+                const winnerNames = winners.map(p => p.username).join(', ');
+                winnerText = `Tie between: ${winnerNames}!`;
             }
         }
 
@@ -505,6 +733,7 @@ class BattleArena {
 }
 
 // Initialize game when page loads
+let battleArena;
 window.addEventListener('load', () => {
-    new BattleArena();
+    battleArena = new BattleArena();
 });
