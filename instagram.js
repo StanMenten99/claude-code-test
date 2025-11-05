@@ -97,7 +97,11 @@ class InstagramFetcher {
             const data = await response.json();
 
             if (data.profilePicUrl) {
-                return data.profilePicUrl;
+                // Proxy the image through our server to avoid CORS issues
+                const baseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+                    ? 'http://localhost:3000'
+                    : '';
+                return `${baseUrl}/api/instagram-image?url=${encodeURIComponent(data.profilePicUrl)}`;
             }
 
             return null;
