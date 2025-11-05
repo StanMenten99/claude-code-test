@@ -72,11 +72,23 @@ class InstagramFetcher {
 
             const response = await fetch(apiUrl);
 
+            // Check if the response is JSON before trying to parse
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                console.log('Proxy server not available (non-JSON response), using fallback');
+                return null;
+            }
+
             if (!response.ok) {
                 // If the server responds with 404 or 500, check if fallback is needed
-                const errorData = await response.json();
-                if (errorData.fallback) {
-                    console.log('Profile not found, using fallback placeholder');
+                try {
+                    const errorData = await response.json();
+                    if (errorData.fallback) {
+                        console.log('Profile not found, using fallback placeholder');
+                        return null;
+                    }
+                } catch (jsonError) {
+                    console.log('Could not parse error response, using fallback');
                     return null;
                 }
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -90,7 +102,7 @@ class InstagramFetcher {
 
             return null;
         } catch (error) {
-            console.error('Proxy server failed:', error);
+            console.log('Proxy server not available, using fallback:', error.message);
             return null;
         }
     }
