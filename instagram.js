@@ -4,6 +4,43 @@ class InstagramFetcher {
         this.cache = new Map();
         this.cacheExpiry = new Map(); // Track cache expiration
         this.cacheTimeout = 5 * 60 * 1000; // 5 minutes cache
+        this.pendingRequests = new Map(); // Track pending requests to avoid duplicates
+        this.debounceTimers = new Map(); // Debounce timers per username
+        this.retryAttempts = new Map(); // Track retry attempts for exponential backoff
+    }
+
+    /**
+     * Debounced version of fetchProfilePicture to prevent rapid-fire requests
+     * @param {string} username - Instagram username
+     * @param {boolean} forceRefresh - Force refresh from server
+     * @param {number} debounceDelay - Debounce delay in milliseconds (default: 500ms)
+     * @returns {Promise<string>} - URL of the profile picture
+     */
+    async fetchProfilePictureDebounced(username, forceRefresh = false, debounceDelay = 500) {
+        if (!username || username.trim() === '') {
+            throw new Error('Username is required');
+        }
+
+        const cacheKey = username.toLowerCase();
+
+        // Clear existing debounce timer for this username
+        if (this.debounceTimers.has(cacheKey)) {
+            clearTimeout(this.debounceTimers.get(cacheKey));
+        }
+
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(async () => {
+                this.debounceTimers.delete(cacheKey);
+                try {
+                    const result = await this.fetchProfilePicture(username, forceRefresh);
+                    resolve(result);
+                } catch (error) {
+                    reject(error);
+                }
+            }, debounceDelay);
+
+            this.debounceTimers.set(cacheKey, timer);
+        });
     }
 
     /**
@@ -17,32 +54,64 @@ class InstagramFetcher {
             throw new Error('Username is required');
         }
 
+        const cacheKey = username.toLowerCase();
+
+        // If there's already a pending request for this username, return that promise
+        if (this.pendingRequests.has(cacheKey)) {
+            console.log(`Reusing pending request for: ${username}`);
+            return this.pendingRequests.get(cacheKey);
+        }
+
         // Check cache validity
         const now = Date.now();
-        if (!forceRefresh && this.cache.has(username)) {
-            const expiry = this.cacheExpiry.get(username);
+        if (!forceRefresh && this.cache.has(cacheKey)) {
+            const expiry = this.cacheExpiry.get(cacheKey);
             if (expiry && expiry > now) {
-                return this.cache.get(username);
+                console.log(`Cache hit for: ${username}`);
+                return this.cache.get(cacheKey);
             }
         }
 
-        try {
-            // Method 1: Try multiple Instagram endpoints
-            let url = await this.tryMultipleEndpoints(username);
-            if (url) {
-                this.cache.set(username, url);
-                this.cacheExpiry.set(username, now + this.cacheTimeout);
-                return url;
-            }
-        } catch (error) {
-            console.warn('All endpoints failed:', error);
-        }
+        // Create the request promise
+        const requestPromise = (async () => {
+            try {
+                // Method 1: Try multiple Instagram endpoints
+                let url = await this.tryMultipleEndpoints(username);
+                if (url) {
+                    this.cache.set(cacheKey, url);
+                    this.cacheExpiry.set(cacheKey, now + this.cacheTimeout);
+                    this.retryAttempts.delete(cacheKey); // Reset retry attempts on success
+                    return url;
+                }
+            } catch (error) {
+                console.warn('All endpoints failed:', error);
 
-        // Fallback: Generate a placeholder avatar
-        const placeholder = this.generatePlaceholder(username);
-        this.cache.set(username, placeholder);
-        this.cacheExpiry.set(username, now + this.cacheTimeout);
-        return placeholder;
+                // Check if it's a rate limit error
+                if (error.retryAfter) {
+                    const attempts = (this.retryAttempts.get(cacheKey) || 0) + 1;
+                    this.retryAttempts.set(cacheKey, attempts);
+
+                    if (attempts < 3) {
+                        console.log(`Rate limited. Retry attempt ${attempts}/3 after ${error.retryAfter} seconds`);
+                        // Wait and retry
+                        await new Promise(resolve => setTimeout(resolve, error.retryAfter * 1000));
+                        this.pendingRequests.delete(cacheKey);
+                        return this.fetchProfilePicture(username, forceRefresh);
+                    }
+                }
+            } finally {
+                this.pendingRequests.delete(cacheKey);
+            }
+
+            // Fallback: Generate a placeholder avatar
+            const placeholder = this.generatePlaceholder(username);
+            this.cache.set(cacheKey, placeholder);
+            this.cacheExpiry.set(cacheKey, now + this.cacheTimeout);
+            return placeholder;
+        })();
+
+        this.pendingRequests.set(cacheKey, requestPromise);
+        return requestPromise;
     }
 
     /**
@@ -83,11 +152,23 @@ class InstagramFetcher {
                 // If the server responds with 404 or 500, check if fallback is needed
                 try {
                     const errorData = await response.json();
+
+                    // Handle rate limiting
+                    if (response.status === 429 && errorData.retryAfter) {
+                        console.log(`Rate limited by server. Retry after ${errorData.retryAfter} seconds`);
+                        const error = new Error('Rate limit exceeded');
+                        error.retryAfter = errorData.retryAfter;
+                        throw error;
+                    }
+
                     if (errorData.fallback) {
                         console.log('Profile not found, using fallback placeholder');
                         return null;
                     }
                 } catch (jsonError) {
+                    if (jsonError.retryAfter) {
+                        throw jsonError; // Re-throw rate limit error
+                    }
                     console.log('Could not parse error response, using fallback');
                     return null;
                 }
@@ -106,6 +187,9 @@ class InstagramFetcher {
 
             return null;
         } catch (error) {
+            if (error.retryAfter) {
+                throw error; // Re-throw rate limit errors
+            }
             console.log('Proxy server not available, using fallback:', error.message);
             return null;
         }
