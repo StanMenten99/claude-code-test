@@ -51,19 +51,48 @@ class InstagramFetcher {
      * @returns {Promise<string|null>} - Profile picture URL or null
      */
     async tryMultipleEndpoints(username) {
-        // Method 1: Try direct Instagram endpoint
-        let url = await this.tryPublicEndpoint(username);
-        if (url) return url;
-
-        // Method 2: Try alternative endpoint
-        url = await this.tryAlternativeEndpoint(username);
-        if (url) return url;
-
-        // Method 3: Try using insta-fetcher proxy
-        url = await this.tryProxyEndpoint(username);
+        // Use local proxy server to avoid CORS issues
+        let url = await this.tryProxyServer(username);
         if (url) return url;
 
         return null;
+    }
+
+    /**
+     * Fetch Instagram profile through local proxy server
+     * @param {string} username - Instagram username
+     * @returns {Promise<string|null>} - Profile picture URL or null
+     */
+    async tryProxyServer(username) {
+        try {
+            // Determine the API endpoint based on the current location
+            const apiUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+                ? `http://localhost:3000/api/instagram/${username}`
+                : `/api/instagram/${username}`;
+
+            const response = await fetch(apiUrl);
+
+            if (!response.ok) {
+                // If the server responds with 404 or 500, check if fallback is needed
+                const errorData = await response.json();
+                if (errorData.fallback) {
+                    console.log('Profile not found, using fallback placeholder');
+                    return null;
+                }
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            if (data.profilePicUrl) {
+                return data.profilePicUrl;
+            }
+
+            return null;
+        } catch (error) {
+            console.error('Proxy server failed:', error);
+            return null;
+        }
     }
 
     /**
