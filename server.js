@@ -155,6 +155,45 @@ app.get('/api/instagram/:username', async (req, res) => {
     }
 });
 
+// Image proxy endpoint to avoid CORS issues
+app.get('/api/instagram-image', async (req, res) => {
+    const { url } = req.query;
+
+    if (!url) {
+        return res.status(400).json({ error: 'Image URL is required' });
+    }
+
+    try {
+        // Fetch the image with proper headers
+        const response = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                'Referer': 'https://www.instagram.com/'
+            },
+            responseType: 'arraybuffer',
+            timeout: 10000
+        });
+
+        // Set appropriate headers for image response
+        const contentType = response.headers['content-type'] || 'image/jpeg';
+        res.set({
+            'Content-Type': contentType,
+            'Cache-Control': 'public, max-age=86400', // Cache for 24 hours
+            'Access-Control-Allow-Origin': '*'
+        });
+
+        // Send the image data
+        res.send(Buffer.from(response.data));
+    } catch (error) {
+        console.error('Error fetching image:', error.message);
+        res.status(500).json({
+            error: 'Failed to fetch image',
+            message: error.message
+        });
+    }
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'Instagram proxy server is running' });
